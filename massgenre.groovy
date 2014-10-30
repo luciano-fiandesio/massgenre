@@ -1,20 +1,98 @@
 @Grab(group='commons-io', module='commons-io', version='2.4')
 @Grab(group='de.u-mass', module='lastfm-java', version='0.1.2')
 @Grab(group='org.jaudiotagger', module='jaudiotagger', version='2.0.1')
+@Grab(group='org.codehaus.groovy.modules.http-builder', module='http-builder', version='0.7.1')
+@Grab(group='org.yaml', module='snakeyaml', version='1.14')
 
 import groovy.io.FileType
 import static Constants.*
 import static Utils.*
 import static org.apache.commons.io.FilenameUtils.*
 import org.jaudiotagger.audio.*
-
 import org.jaudiotagger.tag.*
+import groovyx.net.http.RESTClient
+import static groovyx.net.http.ContentType.*
+import org.yaml.snakeyaml.*
+
 class Constants {
     static final EXTENSIONS = ['mp3','flac','mp4']
     static final MINIMUM_FILES_IN_ALBUM = 5
+    static final LAST_FM_METHOD = 'album.getinfo'
+    static final DEFAULT_WHITELIST_LOCATION = 'genres/genres.txt'
+    static final DEFAULT_GENRETREE_LOCATION = 'genres/genres-tree.yaml'
 }
 
 class MassGenre {
+
+}
+
+class GenreTreeData {
+
+  public String genre
+  public String genreParent
+  public String genreRoot
+  public GenreTreeData(g, gp, gr) {
+    genre =genre
+    genreParent = gp
+    genreRoot = gr
+  }
+}
+
+class GenreTree {
+  def genres
+  def genreMap = [:]
+
+  def GenreTree(String path = DEFAULT_GENRETREE_LOCATION) {
+    def yaml = new Yaml();
+    genres = yaml.load(new FileInputStream(new File(path)))
+    println "yaml has $genres.size root nodes"
+    genres.each() {
+      //println it.keySet()[0]
+      genreMap.put(it.keySet()[0], new GenreTreeData(it.keySet()[0],it.keySet()[0],it.keySet()[0]))
+      recurseGenres(it, it.keySet()[0])
+    }
+  }
+
+  def recurseGenres(Map m, String root) {
+    //println "entering: " + m.keySet()[0]
+    m.values().each() {
+        it.each() { sub ->
+          if (sub instanceof Map) {
+            //println sub.getClass().getName()
+            recurseGenres(sub, root)
+          } else {
+            genreMap.put(sub, new GenreTreeData(sub,m.keySet()[0],root))
+            //println sub.getClass().getName()  + "  " +sub
+          }
+        }
+      }
+
+  }
+
+
+  def exists(String genre) {
+    return genreMap[genre]
+  }
+
+}
+
+class WhiteList {
+  def genres = []
+
+  def WhiteList(String path = DEFAULT_WHITELIST_LOCATION) {
+
+    new File( path ).eachLine { line ->
+      if (line.trim())
+        genres << line
+    }
+    println "whitelist loaded: $genres.size"
+  }
+
+  def contains(String genre) {
+    return genres.contains(genre)
+  }
+
+
 
 }
 
@@ -36,10 +114,8 @@ class ArtistTitleDetector {
     println getName(albumFolder)
     def albumData = getName(albumFolder).split('-')
     return [artist:albumData[0].trim(), title:albumData[1].trim()]
-
-
-
   }
+
   def getDataFromAlbumPath2(String albumFolder) {
     def artists = []
     def albums = []
@@ -63,6 +139,19 @@ class ArtistTitleDetector {
     }
 
 
+  }
+
+}
+
+class LastFM {
+  static final lastapi = new RESTClient( 'http://ws.audioscrobbler.com/2.0/' )
+
+  def getInfo(_artist, _album) {
+    def resp = lastapi.get(query: [method: LAST_FM_METHOD,
+                                   api_key:'3a5b5f24d557b317e6a09d7ead6c00a4',
+                                   album:_album,
+                                   artist:_artist, format:'json'])
+    resp
   }
 
 }
@@ -106,15 +195,30 @@ static  main(args) {
   def data = []
   def scanner = new Scanner()
   def detector = new ArtistTitleDetector()
-  def res = scanner.scanFolder('/Users/luciano/Music/test')
+  def res = scanner.scanFolder(args[0])
   res.albums.each() {
-    def d = detector.getDataFromAlbumPath2(it)
+    // //def d = detector.getDataFromAlbumPath2(it)
     //println "artist: $d.artist / album: $d.title"
-    data << d
+    // //data << d
   }
-  println "found ${res.albums.size} albums"
-  println "found ${res.unknown.size} unknown folders"
-  println data
+  //println "found ${res.albums.size} albums"
+  //println "found ${res.unknown.size} unknown folders"
+  //println data
+
+  //def last = new LastFM()
+  //def t = last.getInfo('Eric Clapton', 'No Reason To Cry')
+  //println t.data.album.toptags
+
+  //def wl = new WhiteList()
+  //println wl.contains('rock')
+  //println wl.contains('emo')
+
+  def a = new GenreTree()
+  def p = a.exists('pippo')
+  println p == null
+  def p1 = a.exists('luk krung')
+  println p1.genreRoot
+  println p1.genreParent
 
 
 }
