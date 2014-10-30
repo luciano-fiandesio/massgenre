@@ -22,9 +22,6 @@ class Constants {
     static final DEFAULT_GENRETREE_LOCATION = 'genres/genres-tree.yaml'
 }
 
-class MassGenre {
-
-}
 
 class GenreTreeData {
 
@@ -36,6 +33,21 @@ class GenreTreeData {
     genreParent = gp
     genreRoot = gr
   }
+}
+
+class TagData {
+  def tags = [:]
+  def getAll() {
+    tags.sort { new Long(it.value) }
+  }
+  def getMostPopular() {
+    tags.max{ new Long(it.value) }.key
+  }
+
+  def add(tag, popularity) {
+    tags.put(tag, new Long(popularity))
+  }
+
 }
 
 class GenreTree {
@@ -146,12 +158,28 @@ class ArtistTitleDetector {
 class LastFM {
   static final lastapi = new RESTClient( 'http://ws.audioscrobbler.com/2.0/' )
 
-  def getInfo(_artist, _album) {
+  def getTags(_artist, _album) {
     def resp = lastapi.get(query: [method: LAST_FM_METHOD,
                                    api_key:'3a5b5f24d557b317e6a09d7ead6c00a4',
                                    album:_album,
                                    artist:_artist, format:'json'])
-    resp
+    def td = new TagData()
+    resp.data.album.toptags.tag.each() { tag ->
+      //println tag.name
+      td.add(tag.name, getTagPopularity(tag.name))
+
+    }
+    return td
+  }
+
+  def getTagPopularity(_tag) {
+    def resp = lastapi.get(query: [method: 'tag.getinfo',
+                                   api_key:'3a5b5f24d557b317e6a09d7ead6c00a4',
+                                   tag:_tag,
+                                  format:'json'])
+    //println resp.data.tag.taggings
+    return resp.data.tag.taggings
+
   }
 
 }
@@ -205,20 +233,21 @@ static  main(args) {
   //println "found ${res.unknown.size} unknown folders"
   //println data
 
-  //def last = new LastFM()
-  //def t = last.getInfo('Eric Clapton', 'No Reason To Cry')
-  //println t.data.album.toptags
+  def last = new LastFM()
+  def t = last.getTags('Eric Clapton', 'No Reason To Cry')
+  def tag =  t.getMostPopular()
 
-  //def wl = new WhiteList()
-  //println wl.contains('rock')
+  def wl = new WhiteList()
+  println wl.contains(tag)
   //println wl.contains('emo')
 
   def a = new GenreTree()
-  def p = a.exists('pippo')
-  println p == null
-  def p1 = a.exists('luk krung')
-  println p1.genreRoot
-  println p1.genreParent
+  def p = a.exists(tag)
+  if (p) {
+    println p1.genreRoot
+    } else { println 'tag doesnt exist in tree'}
+  //def p1 = a.exists('luk krung')
+  //println p1.genreRoot
 
 
 }
