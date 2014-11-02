@@ -3,8 +3,6 @@
 @Grab(group='org.jaudiotagger', module='jaudiotagger', version='2.0.1')
 @Grab(group='org.codehaus.groovy.modules.http-builder', module='http-builder', version='0.7.1')
 @Grab(group='org.yaml', module='snakeyaml', version='1.14')
-@Grab(group='ch.qos.logback', module='logback-classic', version='1.0.13')
-
 
 import groovy.io.FileType
 import static Constants.*
@@ -16,9 +14,10 @@ import groovyx.net.http.RESTClient
 import static groovyx.net.http.ContentType.*
 import org.yaml.snakeyaml.*
 import groovy.util.logging.Slf4j
+import groovy.util.logging.Log
 
 class Constants {
-    static final EXTENSIONS = ['mp3','flac','mp4']
+    static final EXTENSIONS = ['mp3','flac','m4a']
     static final MINIMUM_FILES_IN_ALBUM = 5
     static final LAST_FM_METHOD = 'album.getinfo'
     static final DEFAULT_WHITELIST_LOCATION = 'genres/genres.txt'
@@ -52,6 +51,10 @@ class TagData {
 
   def add(tag, popularity) {
     tags.put(tag, new Long(popularity))
+  }
+
+  def hasTag() {
+    return tags.size() != 0
   }
 
 
@@ -134,34 +137,38 @@ class Utils {
 }
 
 class ArtistTitleDetector {
-  //API Key: 3a5b5f24d557b317e6a09d7ead6c00a4
-  // Secret: is 4ae8ce9e102ce2f1d4b1d87d086cef02
-  def getDataFromAlbumPath(String albumFolder) {
-    println getName(albumFolder)
-    def albumData = getName(albumFolder).split('-')
-    return [artist:albumData[0].trim(), title:albumData[1].trim()]
-  }
 
-  def getDataFromAlbumPath2(String albumFolder) {
-    def artists = []
-    def albums = []
+
+  def getDataFromAlbumPath(String albumFolder) {
+    HashSet artists = []
+    HashSet albums = []
     def results = [:]
+    HashSet album_artist = []
+
     new File(albumFolder).eachFileRecurse (FileType.FILES) { file ->
       if (isMusic(file)) {
-        //Mp3File mp3file = new Mp3File(file.path);
-        def f = AudioFileIO.read(file);
-        Tag tag = f.getTag();
-        artists << tag.getFirst(FieldKey.ARTIST);
-        albums << tag.getFirst(FieldKey.ALBUM);
+        try {
+          def f = AudioFileIO.read(file);
+          Tag tag = f.getTag();
+          artists << tag.getFirst(FieldKey.ARTIST)
+          albums << tag.getFirst(FieldKey.ALBUM)
+          if (tag.getFirst(FieldKey.ALBUM_ARTIST))
+            album_artist << tag.getFirst(FieldKey.ALBUM_ARTIST)
+        } catch (Exception e) {
 
+          return [message:'file problem: ' + e.message]
+        }
       }
     }
-    if (artists.size() >1 || albums.size()>1) {
-      return [artist:artists[0], title:albums[0], message:""]
-
+    if (artists.size() == 1 && albums.size()==1) {
+      return [artist:artists[0], title:albums[0], error:'']
     } else {
-      return [artist:artists[0], title:albums[0], message:"too many albums or artists"]
-
+      // try with album artist
+      if (album_artist.size()==1 && albums.size()==1) {
+        return [artist:album_artist[0], title:albums[0], error:'']
+      } else {
+          return [artist:artists[0], title:albums[0], error:'']
+      }
     }
 
 
@@ -169,6 +176,7 @@ class ArtistTitleDetector {
 
 }
 
+@Log
 class LastFM {
   static final lastapi = new RESTClient( 'http://ws.audioscrobbler.com/2.0/' )
 
@@ -177,11 +185,15 @@ class LastFM {
                                    api_key:'3a5b5f24d557b317e6a09d7ead6c00a4',
                                    album:_album,
                                    artist:_artist, format:'json'])
+    log.fine ("fetching tags for [$_artist] [$_album]")
     def td = new TagData()
-    resp.data.album.toptags.tag.each() { tag ->
-      //println tag.name
-      td.add(tag.name, getTagPopularity(tag.name))
 
+    try {
+      resp.data.album.toptags.tag.each() { tag ->
+        td.add(tag.name, getTagPopularity(tag.name))
+      }
+    } catch (Exception e) {
+      // fix this, ignore the exception and retun
     }
     return td
   }
@@ -198,7 +210,18 @@ class LastFM {
 
 }
 
+@Log
 class Scanner {
+
+  def hasFolders(String  path) {
+
+    def f = new File((String)path)
+    int i = 0
+    f.eachDir() {
+      i++
+    }
+    return i>0
+  }
 
   def scanRootFolder(folderPath) {
       def albums = new HashSet()
@@ -206,15 +229,21 @@ class Scanner {
       def dir = new File(folderPath)
       dir.eachFileRecurse (FileType.DIRECTORIES) { file ->
         //println file.path
+
         if (isAlbum(file.path) ) {
+          log.fine "scanning $file.path as album"
           if (isPartOfAlbum(file.path)) {
             albums << file.parent
+            log.fine ("$file.path is added as subdir of album")
           } else {
             albums << file.path
           }
 
         } else {
-          unknwon << file.path
+          if (!albums.contains(file.parent) && !hasFolders(file.path)) {
+            unknwon << file.path
+            log.fine ("$file.path is added as unprocessable album")
+          }
         }
       }
       return [albums:albums, unknwon:unknwon]
@@ -222,7 +251,7 @@ class Scanner {
 
   def isPartOfAlbum(folderPath) {
     // matches: cd1, c d 1, Disc1, disc 1
-    def pattern = /(cd|c d|(D|d)isc)( ?|-?)\d?\d/
+    def pattern = /(CD|cd|c d|(D|d)isc)( ?|-?)\d?\d/
     return getBaseName(folderPath)==~pattern
   }
 
@@ -234,14 +263,26 @@ class Scanner {
         musicFiles << getBaseName(file.path)
       }
     }
-    return (musicFiles.size > MINIMUM_FILES_IN_ALBUM?true:false)
+    log.fine("scanned $albumFolder...found $musicFiles.size files")
+
+    return (musicFiles.size >= MINIMUM_FILES_IN_ALBUM?true:false)
 
   }
 
 }
 
-@Slf4j
+@Log
 class MassGenre {
+
+  def prettyPrintList = { l ->
+    def s = '\n'
+    l.each() {
+      s+='\t - '+it+'\n'
+
+    }
+    return s
+
+  }
 
   def tagAlbum(String path, boolean dryrun = false) {
 
@@ -252,38 +293,44 @@ class MassGenre {
     def gt = new GenreTree()
     def wl = new WhiteList()
     def res = scanner.scanRootFolder(path)
+    log.fine "scan result - found albums: ${prettyPrintList(res.albums)}"
+    log.fine "scan result - unknwon albums: ${prettyPrintList(res.unknwon)}"
 
     res.albums.each() {
       def tag
-      def d = detector.getDataFromAlbumPath2(it)
-      log.debug d.title
+      def tags
+      def reason
+      Map d = detector.getDataFromAlbumPath(it)
+      if (!d.error) {
+        tags = last.getTags(d.artist, d.title).getAll()
+        // first use the genre tree
+        def firstLastFmTag = ''
+        for(def lastfmtag: tags) {
+          if (!firstLastFmTag) firstLastFmTag = lastfmtag.key
+          println ("processin tag [$lastfmtag.key]")
+          def gtFound = gt.exists(lastfmtag.key)
+          if (gtFound) {
+            log.fine "[$lastfmtag.key] is in genre tree"
+            tag = gtFound.genreRoot
+            if (firstLastFmTag != lastfmtag.key) {
+              log.info "Tag [$lastfmtag.key] found in genre tree, but most popular tag in lastfm [$firstLastFmTag] was not found"
+            }
+            log.info "tag for album [$d.artist / $d.title] is: [$tag]"
 
-      def tags = last.getTags(d.artist, d.title).getAll()
-      print tags
-      // first use the genre tree
-      def firstLastFmTag = ''
-      for(def lastfmtag: tags) {
-        if (!firstLastFmTag)
-          firstLastFmTag = lastfmtag.key
-        def gtFound = gt.exists(lastfmtag.key)
-        log.debug "check if [$lastfmtag.key] is in genre tree ..."
-        if (gtFound) {
-          log.debug "[$lastfmtag.key] is in genre tree!"
-          tag = gtFound.genreRoot
-          if (firstLastFmTag != lastfmtag.key) {
-            log.info "Tag [$lastfmtag.key] found in genre tree, but most popular tag in lastfm [$firstLastFmTag] was not found"
+            break
           }
-          log.info "tag is: [$tag]"
 
-          break
         }
-
+      } else {
+        log.error(d.error)
+        reason = 'an error occurred while getting data from Album folder'
       }
       if (!tag) {
+        println 'checking whitelist'
         for(def lastfmtag: tags) {
           tag = wl.contains(lastfmtag.key)
           if (tag) {
-            log.debug "found tag $tag in whitelist"
+            log.fine "found tag $tag in whitelist"
             break;
           }
         }
