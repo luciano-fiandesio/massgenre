@@ -35,7 +35,9 @@ class GenreTreeData {
     genre =genre
     genreParent = gp
     genreRoot = gr
+
   }
+
 }
 
 class TagData {
@@ -51,6 +53,8 @@ class TagData {
   def add(tag, popularity) {
     tags.put(tag, new Long(popularity))
   }
+
+
 
 }
 
@@ -248,6 +252,7 @@ class MassGenre {
     def gt = new GenreTree()
     def wl = new WhiteList()
     def res = scanner.scanRootFolder(path)
+
     res.albums.each() {
       def tag
       def d = detector.getDataFromAlbumPath2(it)
@@ -255,20 +260,36 @@ class MassGenre {
 
       def tags = last.getTags(d.artist, d.title).getAll()
       print tags
+      // first use the genre tree
+      def firstLastFmTag = ''
       for(def lastfmtag: tags) {
-      //tags.each() { lastfmtag ->
-
+        if (!firstLastFmTag)
+          firstLastFmTag = lastfmtag.key
         def gtFound = gt.exists(lastfmtag.key)
-        log.debug "check $lastfmtag.key is in genre tree"
+        log.debug "check if [$lastfmtag.key] is in genre tree ..."
         if (gtFound) {
-          log.debug "$lastfmtag.key is in genre tree!"
+          log.debug "[$lastfmtag.key] is in genre tree!"
           tag = gtFound.genreRoot
+          if (firstLastFmTag != lastfmtag.key) {
+            log.info "Tag [$lastfmtag.key] found in genre tree, but most popular tag in lastfm [$firstLastFmTag] was not found"
+          }
+          log.info "tag is: [$tag]"
+
           break
         }
 
       }
       if (!tag) {
-        tag = 'not found'
+        for(def lastfmtag: tags) {
+          tag = wl.contains(lastfmtag.key)
+          if (tag) {
+            log.debug "found tag $tag in whitelist"
+            break;
+          }
+        }
+      }
+      if (!tag) {
+        log.info "can't find tag for album: ${d.title}"
       }
      }
   }
@@ -277,5 +298,5 @@ class MassGenre {
 
 static  main(args) {
 
-  new MassGenre().dox(args[0])
+  new MassGenre().tagAlbum(args[0])
 }
